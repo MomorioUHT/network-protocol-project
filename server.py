@@ -17,6 +17,7 @@ TYPE_EOF  = 2
 
 HEADER_FMT = "!B I H H"   # type(1), seq(4), length(2), checksum(2)
 HEADER_SIZE = struct.calcsize(HEADER_FMT)  # 9 bytes
+CHUNK_SIZE = 1024  # fixed chunk size
 
 def internet_checksum(data: bytes) -> int:
     if len(data) % 2 == 1:
@@ -30,7 +31,6 @@ def internet_checksum(data: bytes) -> int:
 
 def make_packet(pkt_type: int, seq_num: int, data: bytes) -> bytes:
     length = len(data)
-    # header with checksum=0
     header_zero = struct.pack(HEADER_FMT, pkt_type, seq_num, length, 0)
     checksum = internet_checksum(header_zero + data)
     header = struct.pack(HEADER_FMT, pkt_type, seq_num, length, checksum)
@@ -42,27 +42,26 @@ def parse_packet(packet: bytes):
     header = packet[:HEADER_SIZE]
     pkt_type, seq_num, length, checksum = struct.unpack(HEADER_FMT, header)
     data = packet[HEADER_SIZE:HEADER_SIZE+length]
-    # verify checksum
     header_zero = struct.pack(HEADER_FMT, pkt_type, seq_num, length, 0)
     calc = internet_checksum(header_zero + data)
     ok = (calc == checksum)
     return pkt_type, seq_num, data, ok
 
-def handle_client_request(client_addr, requested_filename, server_port, loss_rate, corrupt_rate, chunk_size):
+def handle_client_request(client_addr, requested_filename, server_port, loss_rate, corrupt_rate):
     logging.info("Handling client %s request for '%s'", client_addr, requested_filename)
     if not os.path.exists(requested_filename):
         logging.warning("File not found: %s", requested_filename)
         return
-    # create a new socket for this transfer (ephemeral port)
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(('', 0))  # let OS pick ephemeral port
-    sock.settimeout(1.0)  # retransmit timeout
+    sock.bind(('', 0))  # ephemeral port
+    sock.settimeout(1.0)
     seq = 0
     retry_limit = 10
 
     with open(requested_filename, "rb") as f:
         while True:
-            chunk = f.read(chunk_size)
+            chunk = f.read(CHUNK_SIZE)
             if not chunk:
                 break
             packet = make_packet(TYPE_DATA, seq, chunk)
@@ -70,15 +69,12 @@ def handle_client_request(client_addr, requested_filename, server_port, loss_rat
             sent = False
             retries = 0
             while not sent:
-                # simulate loss
                 if random.random() < loss_rate:
                     logging.info("[SIM LOSS] Dropped packet seq=%d to %s", seq, client_addr)
                 else:
-                    # simulate corruption
                     send_packet = packet
                     if random.random() < corrupt_rate:
                         ba = bytearray(packet)
-                        # flip one byte in data region if exists
                         if len(ba) > HEADER_SIZE:
                             idx = HEADER_SIZE + (random.randint(0, len(ba)-HEADER_SIZE-1))
                             ba[idx] ^= 0xFF
@@ -87,15 +83,9 @@ def handle_client_request(client_addr, requested_filename, server_port, loss_rat
                     sock.sendto(send_packet, client_addr)
                     logging.info("Sent seq=%d (%d bytes) to %s", seq, len(chunk), client_addr)
 
-                # wait for ACK
                 try:
                     data, addr = sock.recvfrom(1024)
-                    # parse ack
-                    try:
-                        pkt_type, ack_seq, _, ok = parse_packet(data)
-                    except Exception:
-                        logging.warning("Malformed ACK from %s", addr)
-                        continue
+                    pkt_type, ack_seq, _, ok = parse_packet(data)
                     if pkt_type == TYPE_ACK and ok and ack_seq == seq:
                         logging.info("Received ACK %d from %s", ack_seq, addr)
                         sent = True
@@ -109,9 +99,7 @@ def handle_client_request(client_addr, requested_filename, server_port, loss_rat
                         logging.error("Retries exceeded for seq %d; aborting transfer to %s", seq, client_addr)
                         sock.close()
                         return
-                    # else loop to resend
 
-    # send EOF and wait for ACK of EOF
     eof_packet = make_packet(TYPE_EOF, seq, b'')
     retries = 0
     while True:
@@ -136,21 +124,19 @@ def handle_client_request(client_addr, requested_filename, server_port, loss_rat
     sock.close()
     logging.info("Finished transfer to %s", client_addr)
 
-def main(listen_port, loss_rate, corrupt_rate, chunk_size):
+def main(listen_port, loss_rate, corrupt_rate):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(('', listen_port))
     logging.info("Server listening on UDP port %d", listen_port)
     while True:
         data, client_addr = sock.recvfrom(4096)
-        # Expect client to send filename as a simple string request
         try:
             requested = data.decode().strip()
         except Exception:
             logging.warning("Received non-decodable request from %s", client_addr)
             continue
         logging.info("Received request '%s' from %s", requested, client_addr)
-        # spawn new thread to handle transfer
-        t = threading.Thread(target=handle_client_request, args=(client_addr, requested, listen_port, loss_rate, corrupt_rate, chunk_size), daemon=True)
+        t = threading.Thread(target=handle_client_request, args=(client_addr, requested, listen_port, loss_rate, corrupt_rate), daemon=True)
         t.start()
 
 if __name__ == "__main__":
@@ -158,6 +144,5 @@ if __name__ == "__main__":
     parser.add_argument("port", type=int, help="server listen port")
     parser.add_argument("--loss", type=float, default=0.0, help="simulate packet loss probability (0..1)")
     parser.add_argument("--corrupt", type=float, default=0.0, help="simulate packet corruption probability (0..1)")
-    parser.add_argument("--chunk", type=int, default=1024, help="data chunk size (bytes)")
     args = parser.parse_args()
-    main(args.port, args.loss, args.corrupt, args.chunk)
+    main(args.port, args.loss, args.corrupt)

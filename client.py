@@ -1,6 +1,7 @@
 import socket
 import struct
 import time
+import sys
 
 # -------------------------------
 # Same as server
@@ -68,7 +69,6 @@ def udp_file_client(server_ip: str, port: int, filename: str):
 
         if pkt_type == TYPE_EOF:
             print("Received EOF, file transfer complete.")
-            # send ACK for EOF
             client_socket.sendto(make_ack(seq_num), addr)
             break
 
@@ -84,5 +84,16 @@ def udp_file_client(server_ip: str, port: int, filename: str):
     client_socket.close()
     print(f"File saved as {output_filename}")
 
+# -------------------------------
+# Main: รับ argument จาก command line
+# -------------------------------
 if __name__ == "__main__":
-    udp_file_client(server_ip="127.0.0.1", port=8133, filename="message.txt")
+    if len(sys.argv) != 4:
+        print("Usage: python client.py <server_ip> <port> <filename>")
+        sys.exit(1)
+
+    server_ip = sys.argv[1]
+    port = int(sys.argv[2])
+    filename = sys.argv[3]
+
+    udp_file_client(server_ip, port, filename)
