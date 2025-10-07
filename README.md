@@ -85,7 +85,7 @@ python client.py 127.0.0.1 8133 example.txt
 * Client ส่ง ACK ให้ EOF
 * หาก packet หรือ ACK ของ EOF หาย server จะ retry จนถึง retry_limit
 
-5️⃣ Workflow ของโปรแกรม
+## 5️⃣ Workflow ของโปรแกรม
 
 1. Client ส่ง ชื่อไฟล์ ไปยัง server
 2. Server อ่านไฟล์เป็น chunks ขนาด 1024 bytes
